@@ -1,26 +1,79 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+/* CSS tùy chỉnh cho giao diện báo cáo */
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+    /* Nền trắng mặc định cho di động */
+    background-color: #ffffff;
+    color: #111827;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Khung chứa báo cáo */
+.report-paper {
+    width: 100%;
+    background-color: #ffffff;
+    /* Lề cho di động */
+    padding: 1.5rem 1rem;
+}
+
+/* Áp dụng style "tờ giấy" cho màn hình lớn (desktop) */
+@media (min-width: 768px) {
+    body {
+        /* Nền xám trên desktop để làm nổi bật tờ giấy */
+        background-color: #f3f4f6;
+    }
+    .report-paper {
+        max-width: 8.5in;
+        min-height: 11in;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        margin: 2rem auto;
+        padding: 3rem; /* Lề lớn hơn cho desktop */
+    }
+}
+
+/* Tùy chỉnh cho nội dung HTML từ comment */
+.comment-content {
+    font-size: 0.875rem;
+    line-height: 1.6;
+}
+.comment-content p,
+.comment-content ol,
+.comment-content ul {
+    margin-bottom: 0.5rem;
+}
+.comment-content ol, .comment-content ul {
+    padding-left: 1.25rem;
+}
+.comment-content a {
+    color: #3b82f6;
+    text-decoration: underline;
+}
+.comment-content strong {
+    font-weight: 600;
+}
+.ql-editor.read-mode {
+    padding: 0;
+    font-size: inherit;
+    line-height: inherit;
+}
+.ql-ui { display: none; }
+
+/* CSS cho việc in ấn */
+@media print {
+    body {
+        background-color: #ffffff;
+    }
+    .report-paper {
+        box-shadow: none;
+        margin: 0;
+        max-width: 100%;
+        border: none;
+        padding: 0;
+    }
+    .no-print {
+        display: none;
+    }
 }
