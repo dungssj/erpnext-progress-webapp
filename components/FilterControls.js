@@ -9,6 +9,7 @@ export default function FilterControls({ reportType, onGenerate, isLoading }) {
     company: '',
     project: '',
     comment_owner: '',
+    project_status: [], // <-- Thêm state cho trạng thái dự án
   });
 
   // State để lưu danh sách lấy từ API
@@ -57,11 +58,30 @@ export default function FilterControls({ reportType, onGenerate, isLoading }) {
     setFilters(prev => ({ ...prev, [name]: value }));
   };
 
+  // Hàm mới để xử lý checkbox trạng thái
+  const handleStatusChange = (e) => {
+    const { value, checked } = e.target;
+    setFilters(prev => {
+      const currentStatuses = prev.project_status;
+      if (checked) {
+        return { ...prev, project_status: [...currentStatuses, value] };
+      } else {
+        return { ...prev, project_status: currentStatuses.filter(status => status !== value) };
+      }
+    });
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    let activeFilters = { ...filters };
+    let activeFilters = { ...filters, reportSubType };
 
-    // Dựa vào loại báo cáo để chỉ gửi đi những filter cần thiết
+    // Chuyển mảng trạng thái thành chuỗi để gửi đi
+    if (activeFilters.project_status && activeFilters.project_status.length > 0) {
+        activeFilters.project_status = activeFilters.project_status.join(',');
+    } else {
+        delete activeFilters.project_status;
+    }
+
     if (reportType === 'document') {
         if (reportSubType === 'tong_hop') {
             delete activeFilters.comment_owner;
@@ -71,7 +91,6 @@ export default function FilterControls({ reportType, onGenerate, isLoading }) {
         }
     }
     
-    // Lọc ra các giá trị rỗng
     activeFilters = Object.fromEntries(
       Object.entries(activeFilters).filter(([_, v]) => v != null && v !== '')
     );
@@ -93,7 +112,7 @@ export default function FilterControls({ reportType, onGenerate, isLoading }) {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
           <div>
             <label htmlFor="from_date" className="block text-sm font-medium text-gray-700">Từ ngày</label>
             <input type="date" name="from_date" id="from_date" value={filters.from_date} onChange={handleInputChange} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
@@ -103,6 +122,27 @@ export default function FilterControls({ reportType, onGenerate, isLoading }) {
             <input type="date" name="to_date" id="to_date" value={filters.to_date} onChange={handleInputChange} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />
           </div>
           
+          {/* --- BỘ LỌC TRẠNG THÁI DỰ ÁN MỚI --- */}
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-gray-700">Trạng thái Dự án</label>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+                {['open', 'completed', 'cancelled'].map(status => (
+                    <div key={status} className="flex items-center">
+                        <input
+                            id={`status-${status}`}
+                            name="project_status"
+                            type="checkbox"
+                            value={status}
+                            checked={filters.project_status.includes(status)}
+                            onChange={handleStatusChange}
+                            className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <label htmlFor={`status-${status}`} className="ml-2 block text-sm text-gray-900">{status}</label>
+                    </div>
+                ))}
+            </div>
+          </div>
+
           {(reportSubType === 'ca_nhan' || reportType === 'table') && (
              <div>
               <label htmlFor="comment_owner" className="block text-sm font-medium text-gray-700">Email cá nhân</label>

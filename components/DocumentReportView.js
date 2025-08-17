@@ -1,6 +1,7 @@
 import React from 'react';
 
 // --- COMPONENT ĐỆ QUY ĐỂ RENDER CÂY CÔNG VIỆC ---
+// Component này giờ đây xử lý cả hai loại báo cáo
 function TaskTree({ tasks, level = 0, ownerEmail = null }) {
     if (!tasks || tasks.length === 0) {
         return null;
@@ -11,8 +12,11 @@ function TaskTree({ tasks, level = 0, ownerEmail = null }) {
     return tasks.map(task => {
         let commentsSectionHtml = null;
 
+        // Chỉ hiển thị comment cho task cụ thể (không phải group)
         if (!task.is_group) {
-            // Lọc comment: nếu có ownerEmail thì chỉ lấy của người đó, không thì lấy hết
+            // Lọc comment: 
+            // - Nếu có ownerEmail (báo cáo cá nhân), chỉ lấy comment của người đó.
+            // - Nếu không (báo cáo tổng hợp), lấy tất cả comment.
             const relevantComments = ownerEmail 
                 ? (task.comments || []).filter(c => c.comment_owner === ownerEmail)
                 : (task.comments || []);
@@ -46,13 +50,14 @@ function TaskTree({ tasks, level = 0, ownerEmail = null }) {
                 <div className="pl-5 mt-2 space-y-4">
                     {commentsSectionHtml}
                 </div>
+                {/* Gọi đệ quy cho các task con */}
                 <TaskTree tasks={task.children} level={level + 1} ownerEmail={ownerEmail} />
             </div>
         );
     });
 }
 
-// --- COMPONENT CHÍNH ---
+// --- COMPONENT CHÍNH ĐỂ HIỂN THỊ BÁO CÁO ---
 export default function DocumentReportView({ reportData }) {
     if (!reportData || reportData.length === 0) {
         return (
@@ -66,24 +71,13 @@ export default function DocumentReportView({ reportData }) {
         day: '2-digit', month: '2-digit', year: 'numeric'
     });
 
-    // Nhóm dự án theo người chịu trách nhiệm (cho báo cáo cá nhân)
-    const personalReports = {};
-    reportData.forEach(project => {
-        const responsible = project.responsible_email;
-        if (!responsible) return;
-        if (!personalReports[responsible]) {
-            personalReports[responsible] = [];
-        }
-        personalReports[responsible].push(project);
-    });
-
-    // Xác định xem đây là báo cáo cá nhân hay tổng hợp
-    // Nếu chỉ có 1 người chịu trách nhiệm trong toàn bộ dữ liệu trả về, ta giả định đó là báo cáo cá nhân
-    const isPersonalReport = Object.keys(personalReports).length === 1;
+    // **LOGIC SỬA LẠI:**
+    // Kiểm tra xem đây có phải là báo cáo cá nhân không bằng cách xem project đầu tiên có trường `responsible_email` không.
+    // Trường này chỉ được API thêm vào cho báo cáo cá nhân.
+    const isPersonalReport = reportData[0] && reportData[0].responsible_email;
 
     if (isPersonalReport) {
-        const owner = Object.keys(personalReports)[0];
-        const projects = personalReports[owner];
+        const owner = reportData[0].responsible_email;
         return (
             <div className="report-paper">
                 <div className="border-b border-gray-300 pb-4 mb-4">
@@ -91,7 +85,7 @@ export default function DocumentReportView({ reportData }) {
                     <p className="text-sm text-gray-600 mt-1">Nhân viên: <span className="font-semibold">{owner}</span></p>
                     <p className="text-sm text-gray-500 mt-1">Ngày báo cáo: {today}</p>
                 </div>
-                {projects.map(project => (
+                {reportData.map(project => (
                     <div key={project.project_id} className="mt-6">
                         <h2 className="text-lg font-bold text-gray-800">{project.project_name}</h2>
                         <TaskTree tasks={project.tasks} ownerEmail={owner} />
