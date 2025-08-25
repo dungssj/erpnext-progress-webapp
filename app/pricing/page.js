@@ -9,6 +9,38 @@ const toNum = (v) => {
   return isNaN(n) ? 0 : n;
 };
 const fmt = (v) => new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 }).format(Number(v || 0));
+const fmtCurrency = (v, currency) => new Intl.NumberFormat("en-US", { style: 'currency', currency, maximumFractionDigits: 2 }).format(Number(v || 0));
+
+
+// ===== MessageBox Component =====
+const MessageBox = ({ title, message, onClose }) => {
+  if (!message) return null;
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md transform transition-all">
+        <div className="p-6">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+              <p className="mt-2 text-sm text-gray-600">{message}</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-gray-50 px-6 py-4 rounded-b-2xl text-right">
+          <button
+            onClick={onClose}
+            className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+          >
+            Đã hiểu
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 
 export default function App() {
@@ -31,9 +63,15 @@ export default function App() {
   const [selectedStrategy, setSelectedStrategy] = useState(null);
   const [customSGInput, setCustomSGInput] = useState("");
   const [customSGValue, setCustomSGValue] = useState(null);
+  const [isSuggestingCosts, setIsSuggestingCosts] = useState(false);
+  const [messageBox, setMessageBox] = useState({ title: "", message: "" });
+  const [targetCurrency, setTargetCurrency] = useState('USD');
+  const [exchangeRate, setExchangeRate] = useState(null);
+  const [isConverting, setIsConverting] = useState(false);
+  const [lastConvertedCurrency, setLastConvertedCurrency] = useState('');
 
 
-  // Handlers (same as before)
+  // Handlers
   const addCostCol = () => {
     const idx = costCols.length + 1;
     const id = rndId();
@@ -78,8 +116,148 @@ export default function App() {
 
 
   const removeRow = (id) => setRows((rs) => rs.filter((r) => r.id !== id));
-  const updateCell = (rowId, field, value) => setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, [field]: value } : r)));
-  const updateCost = (rowId, colId, value) => setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, costs: { ...r.costs, [colId]: value } } : r)));
+  const updateCell = (rowId, field, value) => {
+    setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, [field]: value } : r)));
+    setExchangeRate(null); // Reset conversion on data change
+  };
+  const updateCost = (rowId, colId, value) => {
+    setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, costs: { ...r.costs, [colId]: value } } : r)));
+    setExchangeRate(null); // Reset conversion on data change
+  };
+
+
+  // ===== Gemini API Integrations =====
+  const handleSuggestCosts = async () => {
+    const productNames = [...new Set(rows.map(r => r.productName).filter(Boolean))];
+
+
+    if (productNames.length === 0) {
+      setMessageBox({ title: "Chưa có sản phẩm", message: "Vui lòng nhập ít nhất một tên sản phẩm để AI có thể gợi ý chi phí." });
+      return;
+    }
+
+
+    setIsSuggestingCosts(true);
+    const prompt = `Dựa trên các loại sản phẩm sau: ${productNames.join(', ')}, hãy liệt kê các loại chi phí phổ biến có thể phát sinh khi nhập hàng và kinh doanh tại Việt Nam. Ví dụ: chi phí vận chuyển, thuế, marketing, lưu kho, nhân viên, mặt bằng.`;
+    
+    let chatHistory = [];
+    chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+    const payload = { 
+        contents: chatHistory,
+        generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: "OBJECT",
+                properties: {
+                    "costs": {
+                        "type": "ARRAY",
+                        "items": { "type": "STRING" }
+                    }
+                }
+            }
+        }
+    };
+    const apiKey = "AIzaSyC3eYqsnI4Lroh_yKqL9uFZrMqWfxQS8-o" 
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error(`API call failed with status: ${response.status}`);
+      const result = await response.json();
+      
+      if (result.candidates?.[0]?.content?.parts?.[0]) {
+        const jsonText = result.candidates[0].content.parts[0].text;
+        const parsedJson = JSON.parse(jsonText);
+        const suggestedCosts = parsedJson.costs || [];
+        const existingCostNames = new Set(costCols.map(c => c.name.toLowerCase()));
+        const newCosts = suggestedCosts.filter(cost => !existingCostNames.has(cost.toLowerCase()));
+
+
+        if (newCosts.length > 0) {
+          const newCostCols = newCosts.map(name => ({ id: rndId(), name }));
+          setCostCols(prev => [...prev, ...newCostCols]);
+          setRows(prevRows => prevRows.map(row => {
+            const newCostData = {};
+            newCostCols.forEach(col => { newCostData[col.id] = ""; });
+            return { ...row, costs: { ...row.costs, ...newCostData } };
+          }));
+          setMessageBox({ title: "Đã thêm chi phí", message: `AI đã gợi ý và thêm mới ${newCosts.length} mục chi phí: ${newCosts.join(', ')}.` });
+        } else {
+          setMessageBox({ title: "Không có chi phí mới", message: "Tất cả các chi phí AI gợi ý đã có trong bảng của bạn." });
+        }
+      } else {
+        throw new Error("Invalid response structure from API.");
+      }
+    } catch (error) {
+      console.error("Error suggesting costs:", error);
+      setMessageBox({ title: "Lỗi", message: "Không thể nhận gợi ý từ AI. Vui lòng thử lại sau." });
+    } finally {
+      setIsSuggestingCosts(false);
+    }
+  };
+
+
+  const handleCurrencyConversion = async () => {
+    if (!targetCurrency) {
+      setMessageBox({ title: "Chưa chọn tiền tệ", message: "Vui lòng chọn một loại tiền tệ để quy đổi." });
+      return;
+    }
+    setIsConverting(true);
+    setExchangeRate(null);
+
+
+    const prompt = `Tỷ giá hiện tại cho 1 ${targetCurrency} bằng bao nhiêu VND? Cung cấp câu trả lời dưới dạng đối tượng JSON với một khóa duy nhất là "rate" và giá trị là một con số. Ví dụ: {"rate": 25000}.`;
+    let chatHistory = [];
+    chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+    const payload = {
+      contents: chatHistory,
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: { "rate": { "type": "NUMBER" } }
+        }
+      }
+    };
+    const apiKey = "AIzaSyC3eYqsnI4Lroh_yKqL9uFZrMqWfxQS8-o";
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error(`API call failed with status: ${response}`);
+      const result = await response.json();
+      
+      if (result.candidates?.[0]?.content?.parts?.[0]) {
+        const jsonText = result.candidates[0].content.parts[0].text;
+        const parsedJson = JSON.parse(jsonText);
+        const rate = parsedJson.rate;
+        if (typeof rate === 'number' && rate > 0) {
+          setExchangeRate(rate);
+          setLastConvertedCurrency(targetCurrency);
+          setMessageBox({ title: "Thành công", message: `Đã cập nhật tỷ giá: 1 ${targetCurrency} = ${fmt(rate)} VND.` });
+        } else {
+          throw new Error("Invalid rate received from API.");
+        }
+      } else {
+        throw new Error("Invalid response structure from API.");
+      }
+    } catch (error) {
+      console.error("Error fetching exchange rate:", error);
+      setMessageBox({ title: "Lỗi", message: "Không thể lấy tỷ giá hối đoái. Vui lòng thử lại sau." });
+    } finally {
+      setIsConverting(false);
+    }
+  };
 
 
   // Calculations
@@ -99,9 +277,9 @@ export default function App() {
 
 
     const gbList = enriched.map((e) => e.GB_MT);
-    const hasAny = enriched.length > 0;
-    const max_GB_MT = hasAny ? Math.max(...gbList) : 0;
-    const min_GB_MT = hasAny ? Math.min(...gbList) : 0;
+    const hasAny = enriched.length > 0 && gbList.some(v => isFinite(v));
+    const max_GB_MT = hasAny ? Math.max(...gbList.filter(v => isFinite(v))) : 0;
+    const min_GB_MT = hasAny ? Math.min(...gbList.filter(v => isFinite(v))) : 0;
 
 
     let mostIdx = -1;
@@ -190,6 +368,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
+      <MessageBox 
+        title={messageBox.title}
+        message={messageBox.message}
+        onClose={() => setMessageBox({ title: "", message: "" })}
+      />
       {/* Header */}
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-lg border-b border-gray-200/50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -211,7 +394,7 @@ export default function App() {
               <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-full">
                 ● Realtime
               </span>
-              <span className="text-xs text-gray-500 hidden sm:inline">v2.0</span>
+              <span className="text-xs text-gray-500 hidden sm:inline">v2.2</span>
             </div>
           </div>
         </div>
@@ -238,6 +421,11 @@ export default function App() {
             <div className="text-2xl font-bold text-emerald-600">
               {calc.GiaBan_ToiUu ? fmt(calc.GiaBan_ToiUu) : "—"}
             </div>
+             {exchangeRate && calc.GiaBan_ToiUu && (
+              <div className="text-sm text-gray-500 font-medium mt-1">
+                ~ {fmtCurrency(calc.GiaBan_ToiUu / exchangeRate, lastConvertedCurrency)}
+              </div>
+            )}
           </div>
         </div>
 
@@ -245,7 +433,7 @@ export default function App() {
         {/* Section 1: Input Table */}
         <section className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
           <div className="bg-gradient-to-r from-blue-500 to-indigo-600 p-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
                   <span className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center text-sm">1</span>
@@ -253,25 +441,37 @@ export default function App() {
                 </h2>
                 <p className="text-xs text-blue-100 mt-1">Nhập thông tin NCC và chi phí</p>
               </div>
-              <button 
-                onClick={addCostCol} 
-                className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all flex items-center gap-2 backdrop-blur"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Thêm chi phí
-              </button>
+              <div className="flex items-center gap-2">
+                 <button 
+                  onClick={handleSuggestCosts} 
+                  disabled={isSuggestingCosts}
+                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all flex items-center gap-2 backdrop-blur disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSuggestingCosts ? (
+                    <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  ) : '✨'}
+                  {isSuggestingCosts ? 'Đang gợi ý...' : 'Gợi ý Chi phí'}
+                </button>
+                <button 
+                  onClick={addCostCol} 
+                  className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all flex items-center gap-2 backdrop-blur"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Thêm chi phí
+                </button>
+              </div>
             </div>
           </div>
 
-          {/* The container below now handles horizontal scrolling for the table */}
           <div className="overflow-x-auto">
-            {/* CHANGE: Changed w-full to min-w-full to allow the table to grow */}
             <table className="min-w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  {/* CHANGE: Added whitespace-nowrap to all headers to prevent wrapping */}
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider whitespace-nowrap">NCC</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider whitespace-nowrap">Sản phẩm</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 uppercase tracking-wider whitespace-nowrap">SL/Công</th>
@@ -335,7 +535,7 @@ export default function App() {
                     </td>
                     <td className="px-4 py-3">
                       <input 
-                        type="number" 
+                        type="text" 
                         value={r.qtyPerWork} 
                         onChange={(e) => updateCell(r.id, "qtyPerWork", e.target.value)} 
                         placeholder="0" 
@@ -344,7 +544,7 @@ export default function App() {
                     </td>
                     <td className="px-4 py-3">
                       <input 
-                        type="number" 
+                        type="text" 
                         value={r.numWork} 
                         onChange={(e) => updateCell(r.id, "numWork", e.target.value)} 
                         placeholder="0" 
@@ -353,7 +553,7 @@ export default function App() {
                     </td>
                     <td className="px-4 py-3">
                       <input 
-                        type="number" 
+                        type="text" 
                         value={r.price} 
                         onChange={(e) => updateCell(r.id, "price", e.target.value)} 
                         placeholder="0" 
@@ -362,7 +562,7 @@ export default function App() {
                     </td>
                     <td className="px-4 py-3">
                       <input 
-                        type="number" 
+                        type="text" 
                         value={r.targetProfit} 
                         onChange={(e) => updateCell(r.id, "targetProfit", e.target.value)} 
                         placeholder="0" 
@@ -372,7 +572,7 @@ export default function App() {
                     {costCols.map((c) => (
                       <td key={c.id} className="px-4 py-3">
                         <input 
-                          type="number" 
+                          type="text" 
                           value={r.costs?.[c.id] ?? ""} 
                           onChange={(e) => updateCost(r.id, c.id, e.target.value)} 
                           placeholder="0" 
@@ -432,7 +632,7 @@ export default function App() {
                     ? "border-emerald-500 bg-emerald-50 shadow-lg" 
                     : "border-gray-200 hover:border-gray-300 hover:shadow-md"
                 }`}
-                onClick={() => setSelectedStrategy("antoan")}
+                onClick={() => {setSelectedStrategy("antoan"); setExchangeRate(null);}}
               >
                 {selectedStrategy === "antoan" && (
                   <div className="absolute -top-3 -right-3 w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center">
@@ -471,7 +671,7 @@ export default function App() {
                     ? "border-amber-500 bg-amber-50 shadow-lg" 
                     : "border-gray-200 hover:border-gray-300 hover:shadow-md"
                 }`}
-                onClick={() => setSelectedStrategy("canbang")}
+                onClick={() => {setSelectedStrategy("canbang"); setExchangeRate(null);}}
               >
                 {selectedStrategy === "canbang" && (
                   <div className="absolute -top-3 -right-3 w-8 h-8 bg-amber-500 rounded-full flex items-center justify-center">
@@ -510,7 +710,7 @@ export default function App() {
                     ? "border-red-500 bg-red-50 shadow-lg" 
                     : "border-gray-200 hover:border-gray-300 hover:shadow-md"
                 }`}
-                onClick={() => setSelectedStrategy("canhtranh")}
+                onClick={() => {setSelectedStrategy("canhtranh"); setExchangeRate(null);}}
               >
                 {selectedStrategy === "canhtranh" && (
                   <div className="absolute -top-3 -right-3 w-8 h-8 bg-red-500 rounded-full flex items-center justify-center">
@@ -551,7 +751,7 @@ export default function App() {
               </label>
               <div className="flex gap-2">
                 <input 
-                  type="number" 
+                  type="text" 
                   value={customSGInput} 
                   onChange={(e) => setCustomSGInput(e.target.value)} 
                   placeholder="Nhập số tiền" 
@@ -561,6 +761,7 @@ export default function App() {
                   onClick={() => { 
                     setCustomSGValue(toNum(customSGInput)); 
                     setSelectedStrategy("custom"); 
+                    setExchangeRate(null);
                   }} 
                   className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
                 >
@@ -585,6 +786,42 @@ export default function App() {
 
 
             <div className="p-6">
+              {/* Currency Converter */}
+              <div className="p-4 bg-gray-50 rounded-xl mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Quy đổi tiền tệ (Tỷ giá được cung cấp bởi AI):
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    value={targetCurrency}
+                    onChange={(e) => setTargetCurrency(e.target.value)}
+                    className="flex-1 px-4 py-2 rounded-lg border border-gray-300 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  >
+                    <option value="USD">USD - Đô la Mỹ</option>
+                    <option value="EUR">EUR - Euro</option>
+                    <option value="JPY">JPY - Yên Nhật</option>
+                    <option value="CNY">CNY - Nhân dân tệ</option>
+                    <option value="KRW">KRW - Won Hàn Quốc</option>
+                    <option value="INR">INR - Rupee Ấn Độ</option>
+                  </select>
+                  <button
+                    onClick={handleCurrencyConversion}
+                    disabled={isConverting}
+                    className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isConverting ? (
+                      <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                    ) : (
+                      'Quy đổi'
+                    )}
+                  </button>
+                </div>
+              </div>
+
+
               {/* Summary Cards */}
               <div className="grid md:grid-cols-4 gap-4 mb-6">
                 <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-4">
@@ -598,12 +835,22 @@ export default function App() {
                 <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 rounded-xl p-4">
                   <div className="text-xs text-emerald-600 mb-1">Giá bán tối ưu</div>
                   <div className="text-xl font-bold text-emerald-900">{fmt(calc.GiaBan_ToiUu)}</div>
+                   {exchangeRate && (
+                    <div className="text-sm text-emerald-800 font-semibold mt-1">
+                      ~ {fmtCurrency(calc.GiaBan_ToiUu / exchangeRate, lastConvertedCurrency)}
+                    </div>
+                  )}
                 </div>
                 <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-xl p-4">
                   <div className="text-xs text-amber-600 mb-1">Tổng lợi nhuận</div>
                   <div className={`text-xl font-bold ${toNum(calc.totalProfitAll) < 0 ? "text-red-600" : "text-amber-900"}`}>
                     {calc.totalProfitAll != null ? fmt(calc.totalProfitAll) : "—"}
                   </div>
+                  {exchangeRate && calc.totalProfitAll != null && (
+                    <div className={`text-sm font-semibold mt-1 ${toNum(calc.totalProfitAll) < 0 ? "text-red-700" : "text-amber-800"}`}>
+                      ~ {fmtCurrency(calc.totalProfitAll / exchangeRate, lastConvertedCurrency)}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -689,6 +936,11 @@ export default function App() {
                     <div className={`text-2xl font-bold ${toNum(calc.totalProfitAll) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                       {calc.totalProfitAll != null ? fmt(calc.totalProfitAll) : "—"}
                     </div>
+                     {exchangeRate && calc.totalProfitAll != null && (
+                      <div className={`text-lg font-semibold mt-1 ${toNum(calc.totalProfitAll) < 0 ? "text-red-700" : "text-green-700"}`}>
+                        ~ {fmtCurrency(calc.totalProfitAll / exchangeRate, lastConvertedCurrency)}
+                      </div>
+                    )}
                     <div className="text-xs text-gray-500">Tổng lợi nhuận</div>
                   </div>
                 </div>
@@ -702,7 +954,7 @@ export default function App() {
       {/* Footer */}
       <footer className="max-w-7xl mx-auto px-4 py-8 text-center">
         <div className="text-sm text-gray-500">
-          © 2025 Công cụ Định giá NCC • Phiên bản 2.0 • Realtime Calculation
+          © 2025 Công cụ Định giá NCC • Phiên bản 2.2 • Powered by Gemini
         </div>
         <div className="text-xs text-gray-400 mt-2">
           Ứng dụng chạy hoàn toàn trên trình duyệt (Client-side) • Không lưu trữ dữ liệu
